@@ -127,6 +127,7 @@ def duration_seconds(ffprobe_path: str, fpath: str) -> float:
 
 class DownloadWorker(QThread):
     progress = Signal(str)  # status message
+    progress_percent = Signal(int, float)  # index, percent
     finished = Signal(bool, str, list)  # success, message, list of downloaded files
     
     def __init__(self, urls: List[str], output_dir: str):
@@ -148,12 +149,29 @@ class DownloadWorker(QThread):
         # Create output directory
         Path(self.output_dir).mkdir(parents=True, exist_ok=True)
         
-        for url in self.urls:
+        for idx, url in enumerate(self.urls):
             if self._stop:
                 break
             
             try:
                 self.progress.emit(f"Descargando de: {url}")
+                self.progress_percent.emit(idx, 0.0)
+                
+                # Progress hook for yt-dlp
+                def progress_hook(d):
+                    if d['status'] == 'downloading':
+                        try:
+                            if 'total_bytes' in d:
+                                percent = (d['downloaded_bytes'] / d['total_bytes']) * 100
+                            elif 'total_bytes_estimate' in d:
+                                percent = (d['downloaded_bytes'] / d['total_bytes_estimate']) * 100
+                            else:
+                                percent = 0
+                            self.progress_percent.emit(idx, min(percent, 99.0))
+                        except:
+                            pass
+                    elif d['status'] == 'finished':
+                        self.progress_percent.emit(idx, 100.0)
                 
                 # yt-dlp options for best audio quality
                 ydl_opts = {
@@ -162,6 +180,7 @@ class DownloadWorker(QThread):
                     'quiet': False,
                     'no_warnings': False,
                     'extract_flat': False,
+                    'progress_hooks': [progress_hook],
                     'postprocessors': [{
                         'key': 'FFmpegExtractAudio',
                         'preferredcodec': 'best',  # Keep original codec
@@ -420,14 +439,23 @@ class MainWindow(QMainWindow):
 
         adv_group.setLayout(form)
 
-        # Progress
+        # Progress labels and bars
+        self.lbl_current_file = QLabel("")
+        self.lbl_current_file.setWordWrap(True)
+        self.lbl_current_file.setStyleSheet("font-weight: bold; color: #0066cc;")
+        
+        self.progress_current = QProgressBar()
+        self.progress_current.setRange(0, 100)
+        self.progress_current.setFormat("Progreso individual: %p%")
+        self.progress_current.setTextVisible(True)
+        
+        self.lbl_total_status = QLabel("")
+        self.lbl_total_status.setWordWrap(True)
+        
         self.progress_overall = QProgressBar()
         self.progress_overall.setRange(0, 100)
         self.progress_overall.setFormat("Progreso total: %p%")
-
-        self.progress_current = QProgressBar()
-        self.progress_current.setRange(0, 100)
-        self.progress_current.setFormat("Archivo actual: %p%")
+        self.progress_overall.setTextVisible(True)
 
         # Convert controls
         btn_start = QPushButton("Convertir")
@@ -471,8 +499,19 @@ class MainWindow(QMainWindow):
         right.addLayout(fmt_h)
 
         right.addWidget(adv_group)
-        right.addWidget(self.progress_current)
-        right.addWidget(self.progress_overall)
+        
+        # Progress section with labels
+        progress_group = QGroupBox("Progreso")
+        progress_layout = QVBoxLayout()
+        progress_layout.addWidget(QLabel("Archivo actual:"))
+        progress_layout.addWidget(self.lbl_current_file)
+        progress_layout.addWidget(self.progress_current)
+        progress_layout.addWidget(QLabel("Progreso total:"))
+        progress_layout.addWidget(self.lbl_total_status)
+        progress_layout.addWidget(self.progress_overall)
+        progress_group.setLayout(progress_layout)
+        
+        right.addWidget(progress_group)
         right.addWidget(btn_start)
 
         root = QHBoxLayout()
@@ -570,6 +609,8 @@ class MainWindow(QMainWindow):
         tasks, out_root = self.build_tasks()
         self.progress_current.setValue(0)
         self.progress_overall.setValue(0)
+        self.lbl_current_file.setText("")
+        self.lbl_total_status.setText("")
 
         self.worker = ConvertWorker(tasks, self.ffmpeg, self.ffprobe)
         self.worker.progress_file.connect(self.on_file_progress)
@@ -582,21 +623,32 @@ class MainWindow(QMainWindow):
         self.worker.start()
 
     def on_file_progress(self, index: int, percent: float):
+        # Update current file info
+        if index < self.list_files.count():
+            filename = os.path.basename(self.list_files.item(index).text())
+            self.lbl_current_file.setText(f"Convirtiendo: {filename}")
+        
         self.progress_current.setValue(int(percent))
+        
         # Update overall as average of completed + current
         pct = int((self._files_done * 100 + percent) / max(1, self._files_total))
         self.progress_overall.setValue(pct)
+        self.lbl_total_status.setText(f"Archivo {self._files_done + 1} de {self._files_total}")
 
     def on_file_done(self, index: int, success: bool, message: str):
         self._files_done += 1
         self.progress_current.setValue(100)
         pct = int((self._files_done * 100) / max(1, self._files_total))
         self.progress_overall.setValue(pct)
+        self.lbl_total_status.setText(f"Completados: {self._files_done} de {self._files_total}")
+        
         if not success:
             QMessageBox.warning(self, "Error en conversión", f"Archivo #{index+1}: {message}")
 
     def on_all_done(self):
         self.set_ui_enabled(True)
+        self.lbl_current_file.setText("✓ Conversión completada")
+        self.lbl_total_status.setText(f"✓ Completados: {self._files_total} de {self._files_total}")
         QMessageBox.information(self, "Listo", "Conversión finalizada.")
 
     def set_ui_enabled(self, en: bool):
@@ -632,36 +684,72 @@ class MainWindow(QMainWindow):
         if not out_dir:
             out_dir = str(Path.cwd() / "downloads")
         
-        self.download_progress_label.setText("Iniciando descarga...")
+        # Reset progress bars
+        self.progress_current.setValue(0)
+        self.progress_overall.setValue(0)
+        self.lbl_current_file.setText("Iniciando descarga...")
+        self.lbl_total_status.setText(f"0 de {len(urls)} URLs descargadas")
+        self.download_progress_label.setText("Preparando descarga...")
+        
+        self._download_total = len(urls)
+        self._download_done = 0
+        self._will_convert = self.chk_convert_downloaded.isChecked()
+        
         self.set_ui_enabled(False)
         
         self.download_worker = DownloadWorker(urls, out_dir)
         self.download_worker.progress.connect(self.on_download_progress)
+        self.download_worker.progress_percent.connect(self.on_download_percent)
         self.download_worker.finished.connect(self.on_download_finished)
         self.download_worker.start()
     
     def on_download_progress(self, message: str):
         self.download_progress_label.setText(message)
+        self.lbl_current_file.setText(message)
+    
+    def on_download_percent(self, index: int, percent: float):
+        # Update individual progress
+        self.progress_current.setValue(int(percent))
+        
+        # If download is complete for this file, increment counter
+        if percent >= 100.0 and index >= self._download_done:
+            self._download_done = index + 1
+        
+        # Update overall progress
+        overall_pct = int((self._download_done * 100 + percent) / max(1, self._download_total))
+        self.progress_overall.setValue(overall_pct)
+        self.lbl_total_status.setText(f"Descargadas: {self._download_done} de {self._download_total}")
     
     def on_download_finished(self, success: bool, message: str, files: List[str]):
-        self.set_ui_enabled(True)
         self.download_progress_label.setText("")
         
         if success:
+            # Update progress indicators
+            self.progress_overall.setValue(100)
+            self.lbl_total_status.setText(f"✓ Descargadas: {len(files)} de {self._download_total}")
+            
             if self.chk_convert_downloaded.isChecked():
                 # Add downloaded files to conversion list
                 for f in files:
                     self.list_files.addItem(f)
+                self.lbl_current_file.setText(f"✓ Descarga completada. {len(files)} archivo(s) añadidos para conversión.")
+                
+                # Now start conversion automatically
+                self.url_input.clear()
                 QMessageBox.information(self, "Descarga completada", 
-                                      f"{message}\n\nLos archivos se han añadido a la lista de conversión.")
+                                      f"{message}\n\nLos archivos se han añadido a la lista de conversión.\nInicia la conversión cuando estés listo.")
+                self.set_ui_enabled(True)
             else:
                 # Files saved directly
+                self.lbl_current_file.setText(f"✓ Descarga completada. {len(files)} archivo(s) guardados.")
                 QMessageBox.information(self, "Descarga completada",
                                       f"{message}\n\nLos archivos se han guardado en:\n{self.out_dir_line.text() or str(Path.cwd() / 'downloads')}")
-            # Clear URL input
-            self.url_input.clear()
+                self.url_input.clear()
+                self.set_ui_enabled(True)
         else:
+            self.lbl_current_file.setText("✗ Error en la descarga")
             QMessageBox.warning(self, "Error en descarga", message)
+            self.set_ui_enabled(True)
 
 
 def main():
