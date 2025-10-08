@@ -22,8 +22,8 @@ Programa sencillo para convertir audio con foco en **calidad máxima por defecto
 ## Requisitos
 - **Python 3.10+**
 - **FFmpeg** y **FFprobe** accesibles:
-  - Añade a `PATH`, o
-  - Coloca los binarios en `./bin/ffmpeg.exe` y `./bin/ffprobe.exe` junto al `.exe` final.
+  - **Opción 1**: Añade FFmpeg a tu `PATH` del sistema
+  - **Opción 2**: Descarga FFmpeg desde [ffmpeg.org](https://ffmpeg.org/download.html) o [gyan.dev](https://www.gyan.dev/ffmpeg/builds/) y coloca `ffmpeg.exe` y `ffprobe.exe` en la carpeta `./bin/` del proyecto
 
 ## Ejecutar en desarrollo
 ```bash
@@ -33,6 +33,9 @@ python -m venv .venv
 ```
 
 ## Empaquetar a .exe (PyInstaller)
+
+**Antes de empaquetar**: Descarga FFmpeg y coloca `ffmpeg.exe` y `ffprobe.exe` en la carpeta `.\bin\`
+
 Instala PyInstaller y genera un ejecutable portátil:
 ```bash
 .venv\Scripts\pip install pyinstaller
@@ -43,7 +46,12 @@ Instala PyInstaller y genera un ejecutable portátil:
   --add-binary "bin\ffprobe.exe;bin" ^
   main.py
 ```
-Coloca `ffmpeg.exe` y `ffprobe.exe` en `.\bin` antes de empaquetar. El `.exe` quedará en `dist\AudioConverter\`.
+
+El `.exe` quedará en `dist\AudioConverter\`.
+
+### Descarga de FFmpeg
+- Windows: https://www.gyan.dev/ffmpeg/builds/ (elige "ffmpeg-release-essentials.zip")
+- Extrae `ffmpeg.exe` y `ffprobe.exe` de la carpeta `bin` del archivo descargado
 
 ## Consejos de uso
 - Para conservar **máxima calidad**, elige un destino **sin pérdida** si no necesitas compresión destructiva.

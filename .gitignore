@@ -30,7 +30,6 @@ desktop.ini
 *.log
 COMPILACION.txt
 
-# Keep bin folder but not the executables if they're too large
-# Uncomment if ffmpeg/ffprobe are too large for GitHub
-# bin/ffmpeg.exe
-# bin/ffprobe.exe
+# FFmpeg binaries (too large for GitHub - users must download separately)
+bin/ffmpeg.exe
+bin/ffprobe.exe
