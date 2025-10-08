@@ -3,6 +3,8 @@ Programa sencillo para convertir audio con foco en **calidad máxima por defecto
 
 ## Características
 - Interfaz gráfica simple.
+- **Descarga de audio desde Internet**: YouTube, SoundCloud y otras plataformas usando yt-dlp.
+- Opción para convertir archivos descargados o guardarlos directamente en formato original.
 - Arrastra y suelta archivos o carpetas.
 - Selecciona formato destino: WAV, FLAC, ALAC (sin pérdida), MP3 (LAME), AAC, Opus, Ogg Vorbis.
 - Preset **Máxima (recomendada)** que elige parámetros de transparencia por formato.
@@ -24,6 +26,7 @@ Programa sencillo para convertir audio con foco en **calidad máxima por defecto
 - **FFmpeg** y **FFprobe** accesibles:
   - **Opción 1**: Añade FFmpeg a tu `PATH` del sistema
   - **Opción 2**: Descarga FFmpeg desde [ffmpeg.org](https://ffmpeg.org/download.html) o [gyan.dev](https://www.gyan.dev/ffmpeg/builds/) y coloca `ffmpeg.exe` y `ffprobe.exe` en la carpeta `./bin/` del proyecto
+- **yt-dlp**: Para la funcionalidad de descarga de audio desde Internet (se instala automáticamente con `pip install -r requirements.txt`)
 
 ## Ejecutar en desarrollo
 ```bash
@@ -56,6 +59,20 @@ El `.exe` quedará en `dist\AudioConverter\`.
 ## Consejos de uso
 - Para conservar **máxima calidad**, elige un destino **sin pérdida** si no necesitas compresión destructiva.
 - Evita **re-encode** de con pérdida → con pérdida cuando sea posible. La opción “Copiar sin recodificar” se activará si el archivo ya está en el códec y contenedor objetivo sin cambios.
+
+## Descarga desde Internet
+La aplicación ahora incluye funcionalidad para descargar audio directamente desde URLs de plataformas como:
+- **YouTube**: Usa yt-dlp para descargar audio en la mejor calidad disponible
+- **SoundCloud**: Descarga en formato original
+- **Muchas otras plataformas**: Cualquier sitio soportado por yt-dlp
+
+### Cómo usar la descarga:
+1. Introduce una o más URLs en el campo de texto (una por línea)
+2. Selecciona si quieres convertir los archivos descargados o guardarlos directamente
+3. Haz clic en "Descargar desde URL"
+4. Los archivos se descargarán en la carpeta de salida especificada (o en `./downloads` por defecto)
+
+Si marcas "Convertir archivos descargados", los archivos se añadirán automáticamente a la lista de conversión.
 
 ## Mapeo rápido de presets
 - **WAV**: PCM 24-bit o float, sample rate y canales originales.
