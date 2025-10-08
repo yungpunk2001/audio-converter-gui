@@ -1,5 +1,23 @@
-# Audio Converter GUI (Windows)
+# Audio Converter GUI
+
+![Release](https://img.shields.io/github/v/release/yungpunk2001/audio-converter-gui?style=flat-square)
+![Python](https://img.shields.io/badge/python-3.10+-blue.svg?style=flat-square)
+![License](https://img.shields.io/badge/license-MIT-green.svg?style=flat-square)
+![Platform](https://img.shields.io/badge/platform-Windows-lightgrey.svg?style=flat-square)
+
+**[⬇️ Descargar la última versión](https://github.com/yungpunk2001/audio-converter-gui/releases/latest)** | **[📋 Ver todas las versiones](https://github.com/yungpunk2001/audio-converter-gui/releases)**
+
 Programa sencillo para convertir audio con foco en **calidad máxima por defecto**.
+
+## 🚀 Instalación Rápida
+
+### Opción 1: Ejecutable Portable (Recomendado)
+1. **[Descarga AudioConverter.exe](https://github.com/yungpunk2001/audio-converter-gui/releases/latest)** (~290 MB)
+2. Ejecuta el archivo (no requiere instalación)
+3. ¡Listo! Comienza a convertir audio
+
+### Opción 2: Desde el Código Fuente
+Ver instrucciones completas en la sección [Ejecutar en desarrollo](#ejecutar-en-desarrollo)
 
 ## Características
 - Interfaz gráfica simple.
