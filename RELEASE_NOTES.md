@@ -10,20 +10,29 @@ Primera versión oficial de Audio Converter GUI - Conversor de audio profesional
 
 - ✅ **Interfaz gráfica intuitiva** - Fácil de usar, sin comandos complicados
 - ✅ **Drag & Drop** - Arrastra archivos o carpetas directamente
+- ✅ **Descarga desde YouTube** - Pega URLs para descargar y convertir audio directamente
 - ✅ **7 formatos soportados**: WAV, FLAC, ALAC, MP3, AAC, Opus, Ogg Vorbis
 - ✅ **Presets de máxima calidad** por defecto
 - ✅ **Modo personalizado** - Ajusta bitrate, sample rate, canales
 - ✅ **Smart copy** - Evita recodificación innecesaria
 - ✅ **Progreso en tiempo real** - Por archivo y global
-- ✅ **FFmpeg incluido** - No requiere instalación adicional
+- ✅ **FFmpeg y yt-dlp incluidos** - No requiere instalación adicional
 
 ## 🚀 Cómo usar
 
+### Conversión de archivos locales:
 1. **Descarga** `AudioConverter.exe`
 2. **Ejecuta** el archivo (no requiere instalación)
 3. **Arrastra** tus archivos de audio a la ventana
 4. **Selecciona** el formato de salida
 5. **Click** en "Convertir" y listo!
+
+### Descarga desde YouTube:
+1. **Copia** la URL del video de YouTube
+2. **Pega** la URL en el campo "URL(s) para descargar"
+3. **Selecciona** el formato de salida deseado
+4. **Click** en "Descargar desde URL"
+5. El audio se descargará y convertirá automáticamente
 
 ## 🎵 Formatos Soportados
 
@@ -53,13 +62,14 @@ MP3, WAV, FLAC, AAC, M4A, OGG, OPUS, WMA, MP2, AC3, y más...
 **✨ Primera versión estable**
 
 - Interfaz gráfica completa con PySide6
+- **Descarga de audio desde YouTube/URLs** con yt-dlp
 - Soporte para 7 formatos de salida
 - Presets de calidad optimizados
 - Sistema de progreso por archivo y global
 - Detección automática de FFmpeg
 - Smart copy para evitar recodificación
 - Resample de alta calidad con SOXR
-- Ejecutable portable (todo incluido)
+- Ejecutable portable con todo incluido (FFmpeg + yt-dlp)
 
 ## 🐛 Problemas Conocidos
 

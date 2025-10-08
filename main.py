@@ -356,7 +356,7 @@ class MainWindow(QMainWindow):
         self.url_input.setMaximumHeight(80)
         
         self.chk_convert_downloaded = QCheckBox("Convertir archivos descargados")
-        self.chk_convert_downloaded.setChecked(True)
+        self.chk_convert_downloaded.setChecked(False)
         self.chk_convert_downloaded.setToolTip("Si está marcado, los archivos descargados se añadirán a la lista para convertir.\nSi no, se guardarán directamente en su formato original.")
         
         btn_download = QPushButton("Descargar desde URL")
