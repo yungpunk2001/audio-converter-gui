@@ -14,6 +14,11 @@ build/
 dist/
 *.spec
 
+# Temporary documentation (only for local use)
+COMPILACION.txt
+GITHUB_SETUP.md
+SOLUCION_PUSH.md
+
 # IDEs
 .vscode/
 .idea/

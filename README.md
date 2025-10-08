@@ -58,9 +58,42 @@ El `.exe` quedará en `dist\AudioConverter\`.
 - Evita **re-encode** de con pérdida → con pérdida cuando sea posible. La opción “Copiar sin recodificar” se activará si el archivo ya está en el códec y contenedor objetivo sin cambios.
 
 ## Mapeo rápido de presets
-- WAV: PCM 24-bit o float, sample rate y canales originales.
-- FLAC/ALAC: hasta 24-bit, compresión sin pérdida.
-- MP3: LAME V0 (`-q:a 0`) por defecto.
+- **WAV**: PCM 24-bit o float, sample rate y canales originales.
+- **FLAC/ALAC**: hasta 24-bit, compresión sin pérdida.
+- **MP3**: LAME V0 (`-q:a 0`) por defecto, transparencia auditiva.
+- **AAC**: 256 kbps VBR con encoder nativo de FFmpeg.
+- **Opus**: 192 kbps VBR, complejidad 10, ideal para todo tipo de audio.
+- **Vorbis**: Quality 7 (~224 kbps), excelente relación calidad/tamaño.
+
+## Estructura del proyecto
+```
+audio-converter-gui/
+├── main.py              # Interfaz gráfica y lógica principal
+├── quality_presets.py   # Presets de calidad y parámetros de FFmpeg
+├── requirements.txt     # Dependencias Python
+├── build_windows.bat    # Script para compilar a .exe
+├── README.md           # Esta documentación
+├── LICENSE             # Licencia MIT
+└── bin/                # Binarios de FFmpeg (no incluidos, ver bin/README.md)
+    └── README.md       # Instrucciones para descargar FFmpeg
+```
+
+## Contribuciones
+¡Las contribuciones son bienvenidas! Si encuentras un bug o tienes una sugerencia:
+1. Abre un [Issue](https://github.com/yungpunk2001/audio-converter-gui/issues)
+2. Haz un Fork del proyecto
+3. Crea una rama para tu feature (`git checkout -b feature/nueva-funcionalidad`)
+4. Haz commit de tus cambios (`git commit -am 'Añade nueva funcionalidad'`)
+5. Push a la rama (`git push origin feature/nueva-funcionalidad`)
+6. Abre un Pull Request
+
+## Licencia
+Este proyecto está bajo la Licencia MIT. Ver el archivo [LICENSE](LICENSE) para más detalles.
+
+## Créditos
+- **FFmpeg**: [ffmpeg.org](https://ffmpeg.org/) - Herramienta de procesamiento multimedia
+- **PySide6**: Framework Qt para Python
+- **PyInstaller**: Empaquetador de aplicaciones Python
 - AAC: 256 kbps por defecto (nativo). Con `libfdk_aac`, usa VBR 5.
 - Opus: 192 kbps VBR, `-application audio`, complejidad 10.
 - Vorbis: `-q:a 7`.
