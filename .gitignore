@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv
+venv/
+ENV/
+env/
+
+# PyInstaller
+build/
+dist/
+*.spec
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Project specific
+*.log
+COMPILACION.txt
+
+# Keep bin folder but not the executables if they're too large
+# Uncomment if ffmpeg/ffprobe are too large for GitHub
+# bin/ffmpeg.exe
+# bin/ffprobe.exe
