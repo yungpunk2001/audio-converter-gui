@@ -6,15 +6,22 @@ import json
 import subprocess
 from pathlib import Path
 from typing import List, Optional, Tuple
+import tempfile
 
 from PySide6.QtCore import Qt, QThread, Signal
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QFileDialog, QListWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QLabel, QComboBox, QSpinBox, QCheckBox, QProgressBar, QLineEdit, QMessageBox,
-    QGroupBox, QFormLayout
+    QGroupBox, QFormLayout, QTextEdit
 )
 
 import quality_presets as qp
+
+try:
+    import yt_dlp
+    YT_DLP_AVAILABLE = True
+except ImportError:
+    YT_DLP_AVAILABLE = False
 
 # ---------------------------
 # Utilities
@@ -112,6 +119,94 @@ def duration_seconds(ffprobe_path: str, fpath: str) -> float:
         except:
             return 0.0
     return 0.0
+
+
+# ---------------------------
+# Download Worker Thread
+# ---------------------------
+
+class DownloadWorker(QThread):
+    progress = Signal(str)  # status message
+    finished = Signal(bool, str, list)  # success, message, list of downloaded files
+    
+    def __init__(self, urls: List[str], output_dir: str):
+        super().__init__()
+        self.urls = urls
+        self.output_dir = output_dir
+        self._stop = False
+    
+    def stop(self):
+        self._stop = True
+    
+    def run(self):
+        if not YT_DLP_AVAILABLE:
+            self.finished.emit(False, "yt-dlp no está instalado. Ejecuta: pip install yt-dlp", [])
+            return
+        
+        downloaded_files = []
+        
+        # Create output directory
+        Path(self.output_dir).mkdir(parents=True, exist_ok=True)
+        
+        for url in self.urls:
+            if self._stop:
+                break
+            
+            try:
+                self.progress.emit(f"Descargando de: {url}")
+                
+                # yt-dlp options for best audio quality
+                ydl_opts = {
+                    'format': 'bestaudio/best',
+                    'outtmpl': str(Path(self.output_dir) / '%(title)s.%(ext)s'),
+                    'quiet': False,
+                    'no_warnings': False,
+                    'extract_flat': False,
+                    'postprocessors': [{
+                        'key': 'FFmpegExtractAudio',
+                        'preferredcodec': 'best',  # Keep original codec
+                        'preferredquality': '0',   # Best quality
+                    }],
+                    'prefer_ffmpeg': True,
+                    'keepvideo': False,
+                }
+                
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    info = ydl.extract_info(url, download=True)
+                    
+                    # Get the downloaded file path
+                    if 'entries' in info:
+                        # Playlist
+                        for entry in info['entries']:
+                            if entry:
+                                filename = ydl.prepare_filename(entry)
+                                # The postprocessor changes the extension
+                                base = os.path.splitext(filename)[0]
+                                # Try common audio extensions
+                                for ext in ['.opus', '.m4a', '.mp3', '.webm', '.ogg', '.wav', '.flac']:
+                                    potential_file = base + ext
+                                    if os.path.exists(potential_file):
+                                        downloaded_files.append(potential_file)
+                                        self.progress.emit(f"Descargado: {os.path.basename(potential_file)}")
+                                        break
+                    else:
+                        # Single video
+                        filename = ydl.prepare_filename(info)
+                        base = os.path.splitext(filename)[0]
+                        for ext in ['.opus', '.m4a', '.mp3', '.webm', '.ogg', '.wav', '.flac']:
+                            potential_file = base + ext
+                            if os.path.exists(potential_file):
+                                downloaded_files.append(potential_file)
+                                self.progress.emit(f"Descargado: {os.path.basename(potential_file)}")
+                                break
+                
+            except Exception as e:
+                self.progress.emit(f"Error descargando {url}: {str(e)}")
+        
+        if downloaded_files:
+            self.finished.emit(True, f"Descargados {len(downloaded_files)} archivo(s)", downloaded_files)
+        else:
+            self.finished.emit(False, "No se descargó ningún archivo", [])
 
 
 # ---------------------------
@@ -241,6 +336,7 @@ class MainWindow(QMainWindow):
                                  "No se encontró FFmpeg/FFprobe.\n"
                                  "Añade ffmpeg a PATH o coloca los binarios en ./bin junto al ejecutable.")
         self.worker: Optional[ConvertWorker] = None
+        self.download_worker: Optional[DownloadWorker] = None
 
         # Widgets
         self.list_files = QListWidget()
@@ -253,6 +349,21 @@ class MainWindow(QMainWindow):
         btn_rm.clicked.connect(self.remove_selected)
         btn_clear = QPushButton("Limpiar lista")
         btn_clear.clicked.connect(self.list_files.clear)
+        
+        # Download from URL section
+        self.url_input = QTextEdit()
+        self.url_input.setPlaceholderText("Introduce URL(s) para descargar (una por línea)\nEjemplo: https://www.youtube.com/watch?v=...")
+        self.url_input.setMaximumHeight(80)
+        
+        self.chk_convert_downloaded = QCheckBox("Convertir archivos descargados")
+        self.chk_convert_downloaded.setChecked(True)
+        self.chk_convert_downloaded.setToolTip("Si está marcado, los archivos descargados se añadirán a la lista para convertir.\nSi no, se guardarán directamente en su formato original.")
+        
+        btn_download = QPushButton("Descargar desde URL")
+        btn_download.clicked.connect(self.start_download)
+        
+        self.download_progress_label = QLabel("")
+        self.download_progress_label.setWordWrap(True)
 
         # Output path
         self.out_dir_line = QLineEdit()
@@ -324,6 +435,18 @@ class MainWindow(QMainWindow):
 
         # Layouts
         left = QVBoxLayout()
+        
+        # Download section
+        download_group = QGroupBox("Descargar desde Internet")
+        download_layout = QVBoxLayout()
+        download_layout.addWidget(QLabel("URL(s) para descargar:"))
+        download_layout.addWidget(self.url_input)
+        download_layout.addWidget(self.chk_convert_downloaded)
+        download_layout.addWidget(btn_download)
+        download_layout.addWidget(self.download_progress_label)
+        download_group.setLayout(download_layout)
+        left.addWidget(download_group)
+        
         left.addWidget(QLabel("Archivos a convertir"))
         left.addWidget(self.list_files)
         hbtns = QHBoxLayout()
@@ -488,6 +611,57 @@ class MainWindow(QMainWindow):
             le.setEnabled(en)
         for chk in self.findChildren(QCheckBox):
             chk.setEnabled(en)
+    
+    def start_download(self):
+        if not YT_DLP_AVAILABLE:
+            QMessageBox.critical(self, "yt-dlp no encontrado",
+                               "yt-dlp no está instalado.\n"
+                               "Instálalo con: pip install yt-dlp")
+            return
+        
+        url_text = self.url_input.toPlainText().strip()
+        if not url_text:
+            QMessageBox.information(self, "Sin URLs", "Introduce al menos una URL para descargar.")
+            return
+        
+        # Parse URLs (one per line)
+        urls = [line.strip() for line in url_text.split('\n') if line.strip()]
+        
+        # Determine output directory
+        out_dir = self.out_dir_line.text().strip()
+        if not out_dir:
+            out_dir = str(Path.cwd() / "downloads")
+        
+        self.download_progress_label.setText("Iniciando descarga...")
+        self.set_ui_enabled(False)
+        
+        self.download_worker = DownloadWorker(urls, out_dir)
+        self.download_worker.progress.connect(self.on_download_progress)
+        self.download_worker.finished.connect(self.on_download_finished)
+        self.download_worker.start()
+    
+    def on_download_progress(self, message: str):
+        self.download_progress_label.setText(message)
+    
+    def on_download_finished(self, success: bool, message: str, files: List[str]):
+        self.set_ui_enabled(True)
+        self.download_progress_label.setText("")
+        
+        if success:
+            if self.chk_convert_downloaded.isChecked():
+                # Add downloaded files to conversion list
+                for f in files:
+                    self.list_files.addItem(f)
+                QMessageBox.information(self, "Descarga completada", 
+                                      f"{message}\n\nLos archivos se han añadido a la lista de conversión.")
+            else:
+                # Files saved directly
+                QMessageBox.information(self, "Descarga completada",
+                                      f"{message}\n\nLos archivos se han guardado en:\n{self.out_dir_line.text() or str(Path.cwd() / 'downloads')}")
+            # Clear URL input
+            self.url_input.clear()
+        else:
+            QMessageBox.warning(self, "Error en descarga", message)
 
 
 def main():

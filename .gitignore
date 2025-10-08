@@ -38,3 +38,7 @@ COMPILACION.txt
 # FFmpeg binaries (too large for GitHub - users must download separately)
 bin/ffmpeg.exe
 bin/ffprobe.exe
+
+# Downloaded audio files
+downloads/
+output/
