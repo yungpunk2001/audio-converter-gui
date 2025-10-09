@@ -157,6 +157,12 @@ class DownloadWorker(QThread):
                 self.progress.emit(f"Descargando de: {url}")
                 self.progress_percent.emit(idx, 0.0)
                 
+                # Find FFmpeg for yt-dlp
+                ffmpeg_path = find_ffmpeg()
+                if not ffmpeg_path:
+                    self.progress.emit(f"Error: FFmpeg no encontrado para procesar audio")
+                    continue
+                
                 # Progress hook for yt-dlp
                 def progress_hook(d):
                     if d['status'] == 'downloading':
@@ -181,6 +187,7 @@ class DownloadWorker(QThread):
                     'no_warnings': False,
                     'extract_flat': False,
                     'progress_hooks': [progress_hook],
+                    'ffmpeg_location': str(Path(ffmpeg_path).parent),  # Point to FFmpeg directory
                     'postprocessors': [{
                         'key': 'FFmpegExtractAudio',
                         'preferredcodec': 'best',  # Keep original codec
@@ -188,36 +195,51 @@ class DownloadWorker(QThread):
                     }],
                     'prefer_ffmpeg': True,
                     'keepvideo': False,
+                    'writethumbnail': False,  # Don't download thumbnails
+                    'no_post_overwrites': False,
                 }
                 
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                     info = ydl.extract_info(url, download=True)
                     
-                    # Get the downloaded file path
+                    # Get the downloaded file path - use yt-dlp's method
                     if 'entries' in info:
                         # Playlist
                         for entry in info['entries']:
                             if entry:
+                                # Use yt-dlp's prepare_filename to get the actual output file
                                 filename = ydl.prepare_filename(entry)
-                                # The postprocessor changes the extension
-                                base = os.path.splitext(filename)[0]
-                                # Try common audio extensions
-                                for ext in ['.opus', '.m4a', '.mp3', '.webm', '.ogg', '.wav', '.flac']:
-                                    potential_file = base + ext
-                                    if os.path.exists(potential_file):
-                                        downloaded_files.append(potential_file)
-                                        self.progress.emit(f"Descargado: {os.path.basename(potential_file)}")
-                                        break
+                                # Check if file exists as-is
+                                if os.path.exists(filename):
+                                    downloaded_files.append(filename)
+                                    self.progress.emit(f"Descargado: {os.path.basename(filename)}")
+                                else:
+                                    # The postprocessor changes the extension
+                                    base = os.path.splitext(filename)[0]
+                                    # Try common audio extensions
+                                    for ext in ['.opus', '.m4a', '.mp3', '.webm', '.ogg', '.wav', '.flac', '.aac']:
+                                        potential_file = base + ext
+                                        if os.path.exists(potential_file):
+                                            downloaded_files.append(potential_file)
+                                            self.progress.emit(f"Descargado: {os.path.basename(potential_file)}")
+                                            break
                     else:
                         # Single video
                         filename = ydl.prepare_filename(info)
-                        base = os.path.splitext(filename)[0]
-                        for ext in ['.opus', '.m4a', '.mp3', '.webm', '.ogg', '.wav', '.flac']:
-                            potential_file = base + ext
-                            if os.path.exists(potential_file):
-                                downloaded_files.append(potential_file)
-                                self.progress.emit(f"Descargado: {os.path.basename(potential_file)}")
-                                break
+                        # Check if file exists as-is
+                        if os.path.exists(filename):
+                            downloaded_files.append(filename)
+                            self.progress.emit(f"Descargado: {os.path.basename(filename)}")
+                        else:
+                            # The postprocessor changes the extension
+                            base = os.path.splitext(filename)[0]
+                            # Try common audio extensions
+                            for ext in ['.opus', '.m4a', '.mp3', '.webm', '.ogg', '.wav', '.flac', '.aac']:
+                                potential_file = base + ext
+                                if os.path.exists(potential_file):
+                                    downloaded_files.append(potential_file)
+                                    self.progress.emit(f"Descargado: {os.path.basename(potential_file)}")
+                                    break
                 
             except Exception as e:
                 self.progress.emit(f"Error descargando {url}: {str(e)}")
