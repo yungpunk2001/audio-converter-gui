@@ -618,6 +618,7 @@ class MainWindow(QMainWindow):
         return tasks, out_root
 
     def start_convert(self):
+        """Inicia conversión con validaciones y mensajes al usuario"""
         if not self.ffmpeg or not self.ffprobe:
             QMessageBox.critical(self, "FFmpeg no encontrado",
                                  "No se encontró FFmpeg/FFprobe.\n"
@@ -628,11 +629,23 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "Nada que hacer", "Añade al menos un archivo.")
             return
 
+        self.start_convert_internal()
+    
+    def start_convert_internal(self):
+        """Inicia conversión sin validaciones (para uso interno/automático)"""
+        if not self.ffmpeg or not self.ffprobe or self.list_files.count() == 0:
+            return
+
         tasks, out_root = self.build_tasks()
         self.progress_current.setValue(0)
         self.progress_overall.setValue(0)
         self.lbl_current_file.setText("")
         self.lbl_total_status.setText("")
+
+        # Store input files for potential cleanup after automatic conversion
+        self._conversion_input_files = []
+        for task in tasks:
+            self._conversion_input_files.append(task["input"])
 
         self.worker = ConvertWorker(tasks, self.ffmpeg, self.ffprobe)
         self.worker.progress_file.connect(self.on_file_progress)
@@ -640,6 +653,7 @@ class MainWindow(QMainWindow):
         self.worker.all_done.connect(self.on_all_done)
         self._files_total = len(tasks)
         self._files_done = 0
+        self._conversion_success_count = 0
 
         self.set_ui_enabled(False)
         self.worker.start()
@@ -664,14 +678,47 @@ class MainWindow(QMainWindow):
         self.progress_overall.setValue(pct)
         self.lbl_total_status.setText(f"Completados: {self._files_done} de {self._files_total}")
         
-        if not success:
+        # Track successful conversions for automatic cleanup
+        if success:
+            if not hasattr(self, '_conversion_success_count'):
+                self._conversion_success_count = 0
+            self._conversion_success_count += 1
+        else:
             QMessageBox.warning(self, "Error en conversión", f"Archivo #{index+1}: {message}")
 
     def on_all_done(self):
         self.set_ui_enabled(True)
         self.lbl_current_file.setText("✓ Conversión completada")
         self.lbl_total_status.setText(f"✓ Completados: {self._files_total} de {self._files_total}")
-        QMessageBox.information(self, "Listo", "Conversión finalizada.")
+        
+        # Check if this was an automatic conversion after download
+        if hasattr(self, '_will_convert') and self._will_convert:
+            # Delete original downloaded files after successful conversion
+            deleted_count = 0
+            if hasattr(self, '_conversion_input_files'):
+                for input_file in self._conversion_input_files:
+                    try:
+                        if os.path.exists(input_file):
+                            os.remove(input_file)
+                            deleted_count += 1
+                    except Exception as e:
+                        # Si no se puede eliminar, continuar sin error crítico
+                        print(f"No se pudo eliminar {input_file}: {e}")
+            
+            # Clear the list after automatic conversion
+            self.list_files.clear()
+            
+            success_count = getattr(self, '_conversion_success_count', 0)
+            message = f"Descarga y conversión finalizadas.\n\n"
+            message += f"✓ Convertidos: {success_count} archivo(s)\n"
+            if deleted_count > 0:
+                message += f"✓ Archivos temporales eliminados: {deleted_count}"
+            
+            QMessageBox.information(self, "Proceso completado", message)
+            self._will_convert = False  # Reset flag
+            self._conversion_input_files = []  # Clear list
+        else:
+            QMessageBox.information(self, "Listo", "Conversión finalizada.")
 
     def set_ui_enabled(self, en: bool):
         self.findChild(QListWidget).setEnabled(en)
@@ -754,13 +801,14 @@ class MainWindow(QMainWindow):
                 # Add downloaded files to conversion list
                 for f in files:
                     self.list_files.addItem(f)
-                self.lbl_current_file.setText(f"✓ Descarga completada. {len(files)} archivo(s) añadidos para conversión.")
+                self.lbl_current_file.setText(f"✓ Descarga completada. Iniciando conversión automática...")
                 
-                # Now start conversion automatically
+                # Clear URL input
                 self.url_input.clear()
-                QMessageBox.information(self, "Descarga completada", 
-                                      f"{message}\n\nLos archivos se han añadido a la lista de conversión.\nInicia la conversión cuando estés listo.")
-                self.set_ui_enabled(True)
+                
+                # Start conversion automatically (without re-enabling UI)
+                # The UI will be enabled when conversion finishes
+                self.start_convert_internal()
             else:
                 # Files saved directly
                 self.lbl_current_file.setText(f"✓ Descarga completada. {len(files)} archivo(s) guardados.")
