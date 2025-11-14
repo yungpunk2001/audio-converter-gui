@@ -7,6 +7,8 @@ import subprocess
 from pathlib import Path
 from typing import List, Optional, Tuple
 import tempfile
+from threading import Lock
+from datetime import datetime, timedelta
 
 from PySide6.QtCore import Qt, QThread, Signal
 from PySide6.QtWidgets import (
@@ -27,24 +29,131 @@ except ImportError:
 # Utilities
 # ---------------------------
 
+def check_ytdlp_update() -> tuple[bool, str, str]:
+    """
+    Verifica si hay una actualización de yt-dlp disponible.
+    Returns: (needs_update, current_version, message)
+    """
+    if not YT_DLP_AVAILABLE:
+        return False, "N/A", "yt-dlp no está instalado"
+    
+    # CRÍTICO: Deshabilitar auto-update en ejecutable compilado
+    # sys.executable apunta al .exe, no a Python, causando bucle infinito
+    if getattr(sys, 'frozen', False):
+        # Estamos en ejecutable compilado por PyInstaller
+        try:
+            current_version = yt_dlp.version.__version__
+            return False, current_version, f"Auto-actualización deshabilitada en ejecutable (versión actual: {current_version})"
+        except:
+            return False, "unknown", "Auto-actualización deshabilitada en ejecutable"
+    
+    try:
+        # Obtener versión instalada
+        current_version = yt_dlp.version.__version__
+        
+        # Verificar última actualización (archivo de timestamp)
+        cache_dir = Path.home() / ".audio_converter_cache"
+        cache_dir.mkdir(exist_ok=True)
+        update_file = cache_dir / "ytdlp_last_update.txt"
+        
+        # Verificar si ya se actualizó hoy
+        if update_file.exists():
+            try:
+                last_update = datetime.fromisoformat(update_file.read_text().strip())
+                if datetime.now() - last_update < timedelta(days=1):
+                    return False, current_version, f"yt-dlp {current_version} (actualizado hoy)"
+            except:
+                pass
+        
+        # Verificar si hay actualización disponible (sin instalar)
+        # NOTA: Solo funciona en entorno Python normal, no en ejecutable
+        result = subprocess.run(
+            [sys.executable, "-m", "pip", "list", "--outdated"],
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        
+        if "yt-dlp" in result.stdout.lower():
+            return True, current_version, f"Actualización disponible para yt-dlp {current_version}"
+        
+        return False, current_version, f"yt-dlp {current_version} está actualizado"
+        
+    except Exception as e:
+        return False, "unknown", f"Error verificando actualización: {str(e)}"
+
+
+def update_ytdlp_silent() -> tuple[bool, str]:
+    """
+    Actualiza yt-dlp silenciosamente en segundo plano.
+    Returns: (success, message)
+    """
+    # CRÍTICO: Deshabilitar auto-update en ejecutable compilado
+    if getattr(sys, 'frozen', False):
+        return False, "Actualización no disponible en ejecutable compilado"
+    
+    try:
+        result = subprocess.run(
+            [sys.executable, "-m", "pip", "install", "--upgrade", "yt-dlp", "--quiet"],
+            capture_output=True,
+            text=True,
+            timeout=30
+        )
+        
+        if result.returncode == 0:
+            # Guardar timestamp de actualización
+            cache_dir = Path.home() / ".audio_converter_cache"
+            cache_dir.mkdir(exist_ok=True)
+            update_file = cache_dir / "ytdlp_last_update.txt"
+            update_file.write_text(datetime.now().isoformat())
+            
+            # Obtener nueva versión
+            try:
+                import importlib
+                importlib.reload(yt_dlp.version)
+                new_version = yt_dlp.version.__version__
+                return True, f"yt-dlp actualizado a {new_version}"
+            except:
+                return True, "yt-dlp actualizado exitosamente"
+        else:
+            return False, f"Error al actualizar: {result.stderr[:200]}"
+            
+    except subprocess.TimeoutExpired:
+        return False, "Timeout al actualizar (conexión lenta)"
+    except Exception as e:
+        return False, f"Error: {str(e)}"
+
+
 def find_ffmpeg() -> Optional[str]:
     """
     Return path to ffmpeg executable.
     Priority: local ./bin/ffmpeg(.exe) then PATH.
     """
-    # Local bin
+    # 1. Local bin dentro del ejecutable (PyInstaller _MEIPASS)
     local_bin = Path(getattr(sys, "_MEIPASS", Path.cwd())) / "bin"
     for candidate in ["ffmpeg.exe", "ffmpeg"]:
         p = local_bin / candidate
         if p.exists():
+            print(f"✓ FFmpeg encontrado en _MEIPASS: {p}")
             return str(p)
-
-    # PATH
+    
+    # 2. Carpeta bin junto al ejecutable (para distribución)
+    if getattr(sys, 'frozen', False):
+        # Estamos en ejecutable, buscar en carpeta del .exe
+        exe_dir = Path(sys.executable).parent / "bin"
+        for candidate in ["ffmpeg.exe", "ffmpeg"]:
+            p = exe_dir / candidate
+            if p.exists():
+                print(f"✓ FFmpeg encontrado junto al ejecutable: {p}")
+                return str(p)
+    
+    # 3. PATH del sistema
     exe = shutil.which("ffmpeg")
     if exe:
+        print(f"✓ FFmpeg encontrado en PATH: {exe}")
         return exe
 
-    # Windows PATH try common installs
+    # 4. Windows PATH try common installs
     if os.name == "nt":
         common = [
             r"C:\ffmpeg\bin\ffmpeg.exe",
@@ -53,22 +162,42 @@ def find_ffmpeg() -> Optional[str]:
         ]
         for c in common:
             if os.path.exists(c):
+                print(f"✓ FFmpeg encontrado en ubicación común: {c}")
                 return c
+    
+    print("❌ FFmpeg NO encontrado en ninguna ubicación")
     return None
 
 
 def find_ffprobe() -> Optional[str]:
-    # Mirror logic of ffmpeg
+    """
+    Return path to ffprobe executable.
+    Mirror logic of find_ffmpeg.
+    """
+    # 1. Local bin dentro del ejecutable (PyInstaller _MEIPASS)
     local_bin = Path(getattr(sys, "_MEIPASS", Path.cwd())) / "bin"
     for candidate in ["ffprobe.exe", "ffprobe"]:
         p = local_bin / candidate
         if p.exists():
+            print(f"✓ FFprobe encontrado en _MEIPASS: {p}")
             return str(p)
-
+    
+    # 2. Carpeta bin junto al ejecutable (para distribución)
+    if getattr(sys, 'frozen', False):
+        exe_dir = Path(sys.executable).parent / "bin"
+        for candidate in ["ffprobe.exe", "ffprobe"]:
+            p = exe_dir / candidate
+            if p.exists():
+                print(f"✓ FFprobe encontrado junto al ejecutable: {p}")
+                return str(p)
+    
+    # 3. PATH del sistema
     exe = shutil.which("ffprobe")
     if exe:
+        print(f"✓ FFprobe encontrado en PATH: {exe}")
         return exe
 
+    # 4. Windows common locations
     if os.name == "nt":
         common = [
             r"C:\ffmpeg\bin\ffprobe.exe",
@@ -77,7 +206,10 @@ def find_ffprobe() -> Optional[str]:
         ]
         for c in common:
             if os.path.exists(c):
+                print(f"✓ FFprobe encontrado en ubicación común: {c}")
                 return c
+    
+    print("❌ FFprobe NO encontrado en ninguna ubicación")
     return None
 
 
@@ -135,9 +267,15 @@ class DownloadWorker(QThread):
         self.urls = urls
         self.output_dir = output_dir
         self._stop = False
+        self._stop_lock = Lock()
     
     def stop(self):
-        self._stop = True
+        with self._stop_lock:
+            self._stop = True
+    
+    def is_stopped(self) -> bool:
+        with self._stop_lock:
+            return self._stop
     
     def run(self):
         if not YT_DLP_AVAILABLE:
@@ -150,18 +288,31 @@ class DownloadWorker(QThread):
         Path(self.output_dir).mkdir(parents=True, exist_ok=True)
         
         for idx, url in enumerate(self.urls):
-            if self._stop:
+            if self.is_stopped():
                 break
             
             try:
                 self.progress.emit(f"Descargando de: {url}")
                 self.progress_percent.emit(idx, 0.0)
                 
+                # Debug: Verificar si estamos en ejecutable
+                if getattr(sys, 'frozen', False):
+                    self.progress.emit(f"🔍 Modo: Ejecutable compilado (PyInstaller)")
+                else:
+                    self.progress.emit(f"🔍 Modo: Python directo")
+                
                 # Find FFmpeg for yt-dlp
                 ffmpeg_path = find_ffmpeg()
                 if not ffmpeg_path:
-                    self.progress.emit(f"Error: FFmpeg no encontrado para procesar audio")
-                    continue
+                    error_msg = ("❌ ERROR CRÍTICO: FFmpeg no encontrado\n\n"
+                                "FFmpeg es necesario para procesar el audio descargado.\n\n"
+                                "SOLUCIONES:\n"
+                                "1. Instala FFmpeg: https://ffmpeg.org/download.html\n"
+                                "2. Añade FFmpeg a la variable PATH del sistema\n"
+                                "3. O coloca ffmpeg.exe en la carpeta 'bin' junto al ejecutable")
+                    self.progress.emit(error_msg)
+                    self.finished.emit(False, error_msg, [])
+                    return  # ← Detener completamente, no continuar
                 
                 # Progress hook for yt-dlp
                 def progress_hook(d):
@@ -180,6 +331,7 @@ class DownloadWorker(QThread):
                         self.progress_percent.emit(idx, 100.0)
                 
                 # yt-dlp options for best audio quality
+                # Configuración mejorada para evitar error 403 de YouTube
                 ydl_opts = {
                     'format': 'bestaudio/best',
                     'outtmpl': str(Path(self.output_dir) / '%(title)s.%(ext)s'),
@@ -187,16 +339,43 @@ class DownloadWorker(QThread):
                     'no_warnings': False,
                     'extract_flat': False,
                     'progress_hooks': [progress_hook],
-                    'ffmpeg_location': str(Path(ffmpeg_path).parent),  # Point to FFmpeg directory
+                    'ffmpeg_location': str(Path(ffmpeg_path).parent),
                     'postprocessors': [{
                         'key': 'FFmpegExtractAudio',
-                        'preferredcodec': 'best',  # Keep original codec
-                        'preferredquality': '0',   # Best quality
+                        'preferredcodec': 'best',
+                        'preferredquality': '0',
                     }],
                     'prefer_ffmpeg': True,
                     'keepvideo': False,
-                    'writethumbnail': False,  # Don't download thumbnails
+                    'writethumbnail': False,
                     'no_post_overwrites': False,
+                    
+                    # Soluciones para error 403 de YouTube
+                    'extractor_args': {
+                        'youtube': {
+                            'player_client': ['android', 'web'],
+                            'player_skip': ['webpage', 'configs'],
+                        }
+                    },
+                    
+                    # Headers para simular navegador real
+                    'http_headers': {
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                        'Accept-Language': 'es-ES,es;q=0.9,en;q=0.8',
+                        'Accept-Encoding': 'gzip, deflate',
+                        'DNT': '1',
+                        'Connection': 'keep-alive',
+                        'Upgrade-Insecure-Requests': '1'
+                    },
+                    
+                    # Opciones adicionales para estabilidad
+                    'socket_timeout': 30,
+                    'retries': 3,
+                    'fragment_retries': 3,
+                    'skip_unavailable_fragments': True,
+                    'ignoreerrors': False,
+                    'nocheckcertificate': False,
                 }
                 
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -242,12 +421,32 @@ class DownloadWorker(QThread):
                                     break
                 
             except Exception as e:
-                self.progress.emit(f"Error descargando {url}: {str(e)}")
+                error_msg = str(e)
+                self.progress.emit(f"Error descargando {url}: {error_msg}")
+                
+                # Detectar errores específicos y dar soluciones
+                if "403" in error_msg or "Forbidden" in error_msg:
+                    self.progress.emit("⚠️ Error 403: YouTube bloqueó la descarga.")
+                    self.progress.emit("💡 Solución: Actualiza yt-dlp con: pip install -U yt-dlp")
+                elif "429" in error_msg or "Too Many Requests" in error_msg:
+                    self.progress.emit("⚠️ Demasiadas peticiones. Espera unos minutos.")
+                elif "Private video" in error_msg or "unavailable" in error_msg:
+                    self.progress.emit("⚠️ El video es privado o no está disponible.")
         
         if downloaded_files:
             self.finished.emit(True, f"Descargados {len(downloaded_files)} archivo(s)", downloaded_files)
         else:
-            self.finished.emit(False, "No se descargó ningún archivo", [])
+            # Mensaje más descriptivo si no se descargó nada
+            if any("403" in str(e) for e in []):  # Simplificado
+                error_detail = ("No se descargó ningún archivo.\n\n"
+                               "Si obtuviste errores 403 de YouTube:\n"
+                               "1. Actualiza yt-dlp: pip install -U yt-dlp\n"
+                               "2. Reinicia la aplicación\n"
+                               "3. Intenta de nuevo")
+            else:
+                error_detail = "No se descargó ningún archivo. Revisa los errores arriba."
+            
+            self.finished.emit(False, error_detail, [])
 
 
 # ---------------------------
@@ -265,13 +464,19 @@ class ConvertWorker(QThread):
         self.ffmpeg_path = ffmpeg_path
         self.ffprobe_path = ffprobe_path
         self._stop = False
+        self._stop_lock = Lock()
 
     def stop(self):
-        self._stop = True
+        with self._stop_lock:
+            self._stop = True
+    
+    def is_stopped(self) -> bool:
+        with self._stop_lock:
+            return self._stop
 
     def run(self):
         for idx, task in enumerate(self.tasks):
-            if self._stop:
+            if self.is_stopped():
                 break
 
             in_f = task["input"]
@@ -333,8 +538,13 @@ class ConvertWorker(QThread):
                 with subprocess.Popen(cmd_progress, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, bufsize=1) as proc:
                     last_time = 0.0
                     for line in proc.stdout:
-                        if self._stop:
-                            proc.kill()
+                        if self.is_stopped():
+                            proc.terminate()
+                            try:
+                                proc.wait(timeout=2)
+                            except subprocess.TimeoutExpired:
+                                proc.kill()
+                                proc.wait()
                             break
                         line = line.strip()
                         if line.startswith("out_time_ms"):
@@ -350,9 +560,18 @@ class ConvertWorker(QThread):
                             self.progress_file.emit(idx, 100.0)
                     proc.wait()
                     ok = (proc.returncode == 0)
-                    # On failure, capture stderr once
-                    stderr = proc.stderr.read().strip() if proc.stderr else ""
+                    # On failure, capture stderr (limited to avoid memory issues)
+                    stderr = ""
+                    if proc.stderr:
+                        stderr_lines = proc.stderr.read().strip().split('\n')
+                        # Keep only last 20 lines to avoid memory issues with large outputs
+                        stderr = '\n'.join(stderr_lines[-20:])
                     self.file_done.emit(idx, ok, "ok" if ok else stderr)
+            except subprocess.TimeoutExpired:
+                if proc.poll() is None:
+                    proc.kill()
+                    proc.wait()
+                self.file_done.emit(idx, False, "Proceso cancelado o timeout")
             except Exception as e:
                 self.file_done.emit(idx, False, str(e))
 
@@ -378,6 +597,10 @@ class MainWindow(QMainWindow):
                                  "Añade ffmpeg a PATH o coloca los binarios en ./bin junto al ejecutable.")
         self.worker: Optional[ConvertWorker] = None
         self.download_worker: Optional[DownloadWorker] = None
+        
+        # Verificar actualización de yt-dlp al inicio (solo una vez al día)
+        if YT_DLP_AVAILABLE:
+            self.check_and_update_ytdlp()
 
         # Widgets
         self.list_files = QListWidget()
@@ -482,6 +705,11 @@ class MainWindow(QMainWindow):
         # Convert controls
         btn_start = QPushButton("Convertir")
         btn_start.clicked.connect(self.start_convert)
+        
+        self.btn_cancel = QPushButton("Cancelar")
+        self.btn_cancel.clicked.connect(self.cancel_operation)
+        self.btn_cancel.setEnabled(False)
+        # self.btn_cancel.setStyleSheet("background-color: #cc0000; color: white; font-weight: bold;")
 
         # Layouts
         left = QVBoxLayout()
@@ -534,7 +762,12 @@ class MainWindow(QMainWindow):
         progress_group.setLayout(progress_layout)
         
         right.addWidget(progress_group)
-        right.addWidget(btn_start)
+        
+        # Buttons layout
+        buttons_h = QHBoxLayout()
+        buttons_h.addWidget(btn_start)
+        buttons_h.addWidget(self.btn_cancel)
+        right.addLayout(buttons_h)
 
         root = QHBoxLayout()
         w = QWidget()
@@ -555,7 +788,22 @@ class MainWindow(QMainWindow):
     def add_files(self):
         files, _ = QFileDialog.getOpenFileNames(self, "Selecciona archivos de audio")
         for f in files:
-            self.list_files.addItem(f)
+            # Validar existencia y permisos
+            if not os.path.exists(f):
+                QMessageBox.warning(self, "Archivo no encontrado", 
+                                  f"No se puede acceder a:\n{f}")
+                continue
+            
+            if not os.access(f, os.R_OK):
+                QMessageBox.warning(self, "Sin permisos", 
+                                  f"No se puede leer:\n{f}")
+                continue
+            
+            # Evitar duplicados
+            items = [self.list_files.item(i).text() 
+                    for i in range(self.list_files.count())]
+            if f not in items:
+                self.list_files.addItem(f)
 
     def add_folder(self):
         folder = QFileDialog.getExistingDirectory(self, "Selecciona carpeta")
@@ -628,6 +876,24 @@ class MainWindow(QMainWindow):
         if self.list_files.count() == 0:
             QMessageBox.information(self, "Nada que hacer", "Añade al menos un archivo.")
             return
+
+        # Validar carpeta de salida
+        out_dir = self.out_dir_line.text().strip()
+        if out_dir:
+            try:
+                Path(out_dir).mkdir(parents=True, exist_ok=True)
+                # Test write permissions
+                test_file = Path(out_dir) / ".write_test"
+                test_file.touch()
+                test_file.unlink()
+            except PermissionError:
+                QMessageBox.critical(self, "Sin permisos",
+                                   f"No se puede escribir en:\n{out_dir}")
+                return
+            except Exception as e:
+                QMessageBox.critical(self, "Error de acceso", 
+                                   f"Error al acceder a carpeta de salida:\n{str(e)}")
+                return
 
         self.start_convert_internal()
     
@@ -723,7 +989,9 @@ class MainWindow(QMainWindow):
     def set_ui_enabled(self, en: bool):
         self.findChild(QListWidget).setEnabled(en)
         for btn in self.findChildren(QPushButton):
-            btn.setEnabled(en)
+            # No deshabilitar el botón cancelar, solo habilitarlo/deshabilitarlo inversamente
+            if btn != self.btn_cancel:
+                btn.setEnabled(en)
         for cb in self.findChildren(QComboBox):
             cb.setEnabled(en)
         for sp in self.findChildren(QSpinBox):
@@ -732,13 +1000,135 @@ class MainWindow(QMainWindow):
             le.setEnabled(en)
         for chk in self.findChildren(QCheckBox):
             chk.setEnabled(en)
+        
+        # Habilitar botón cancelar solo durante operaciones
+        self.btn_cancel.setEnabled(not en)
+    
+    def cancel_operation(self):
+        """Cancela la operación en curso (descarga o conversión)"""
+        if self.worker and self.worker.isRunning():
+            reply = QMessageBox.question(
+                self, "Cancelar conversión",
+                "¿Deseas cancelar la conversión en curso?\n\nLos archivos ya convertidos se mantendrán.",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No
+            )
+            if reply == QMessageBox.Yes:
+                self.worker.stop()
+                self.lbl_current_file.setText("✗ Conversión cancelada por el usuario")
+                self.btn_cancel.setEnabled(False)
+        
+        if self.download_worker and self.download_worker.isRunning():
+            reply = QMessageBox.question(
+                self, "Cancelar descarga",
+                "¿Deseas cancelar la descarga en curso?\n\nLos archivos ya descargados se mantendrán.",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No
+            )
+            if reply == QMessageBox.Yes:
+                self.download_worker.stop()
+                self.lbl_current_file.setText("✗ Descarga cancelada por el usuario")
+                self.btn_cancel.setEnabled(False)
+    
+    def check_and_update_ytdlp(self):
+        """Verifica y actualiza yt-dlp si es necesario (solo una vez al día)"""
+        try:
+            needs_update, current_ver, message = check_ytdlp_update()
+            
+            if needs_update:
+                # Mostrar diálogo con información de actualización
+                msg = QMessageBox(self)
+                msg.setIcon(QMessageBox.Information)
+                msg.setWindowTitle("Actualización de yt-dlp disponible")
+                msg.setText(f"Se ha detectado una nueva versión de yt-dlp.\n\n{message}")
+                msg.setInformativeText(
+                    "Se recomienda actualizar para evitar errores al descargar de YouTube.\n\n"
+                    "¿Deseas actualizar ahora? (tardará unos segundos)"
+                )
+                msg.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
+                msg.setDefaultButton(QMessageBox.Yes)
+                
+                if msg.exec() == QMessageBox.Yes:
+                    # Mostrar mensaje de progreso
+                    progress_msg = QMessageBox(self)
+                    progress_msg.setIcon(QMessageBox.Information)
+                    progress_msg.setWindowTitle("Actualizando yt-dlp")
+                    progress_msg.setText("Actualizando yt-dlp, por favor espera...")
+                    progress_msg.setStandardButtons(QMessageBox.NoButton)
+                    progress_msg.setModal(True)
+                    progress_msg.show()
+                    QApplication.processEvents()
+                    
+                    # Realizar actualización
+                    success, update_msg = update_ytdlp_silent()
+                    progress_msg.close()
+                    
+                    if success:
+                        QMessageBox.information(
+                            self, "Actualización completada",
+                            f"✓ {update_msg}\n\n"
+                            "yt-dlp se ha actualizado correctamente."
+                        )
+                    else:
+                        QMessageBox.warning(
+                            self, "Error de actualización",
+                            f"No se pudo actualizar yt-dlp:\n\n{update_msg}\n\n"
+                            "Puedes intentar actualizar manualmente con:\n"
+                            "pip install --upgrade yt-dlp"
+                        )
+            elif message:  # Hay mensaje pero no necesita actualización (ya está actualizado)
+                # Solo mostrar en caso de primera comprobación del día
+                pass  # No molestar al usuario si ya está actualizado
+                
+        except Exception as e:
+            # Fallo silencioso: no interrumpir el inicio de la app por errores de actualización
+            print(f"Error al verificar actualización de yt-dlp: {e}")
+    
+    def closeEvent(self, event):
+        """Limpieza al cerrar la aplicación"""
+        # Verificar si hay operaciones en curso
+        worker_running = self.worker and self.worker.isRunning()
+        download_running = self.download_worker and self.download_worker.isRunning()
+        
+        if worker_running or download_running:
+            reply = QMessageBox.question(
+                self, "Operación en curso",
+                "Hay una operación en progreso.\n¿Deseas cancelarla y salir?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No
+            )
+            if reply == QMessageBox.No:
+                event.ignore()
+                return
+            
+            # Detener hilos activos
+            if worker_running:
+                self.worker.stop()
+                self.worker.wait(5000)  # Esperar máx 5 segundos
+                if self.worker.isRunning():
+                    self.worker.terminate()
+            
+            if download_running:
+                self.download_worker.stop()
+                self.download_worker.wait(5000)
+                if self.download_worker.isRunning():
+                    self.download_worker.terminate()
+        
+        event.accept()
     
     def start_download(self):
         if not YT_DLP_AVAILABLE:
             QMessageBox.critical(self, "yt-dlp no encontrado",
-                               "yt-dlp no está instalado.\n"
+                               "yt-dlp no está instalado.\n\n"
                                "Instálalo con: pip install yt-dlp")
             return
+        
+        # Verificar versión de yt-dlp (opcional pero recomendado)
+        try:
+            import yt_dlp
+            yt_dlp_version = yt_dlp.version.__version__
+        except:
+            yt_dlp_version = "desconocida"
         
         url_text = self.url_input.toPlainText().strip()
         if not url_text:
@@ -801,7 +1191,8 @@ class MainWindow(QMainWindow):
                 # Add downloaded files to conversion list
                 for f in files:
                     self.list_files.addItem(f)
-                self.lbl_current_file.setText(f"✓ Descarga completada. Iniciando conversión automática...")
+                
+                self.lbl_current_file.setText("✓ Descarga completada. Iniciando conversión automática...")
                 
                 # Clear URL input
                 self.url_input.clear()
@@ -810,19 +1201,37 @@ class MainWindow(QMainWindow):
                 # The UI will be enabled when conversion finishes
                 self.start_convert_internal()
             else:
-                # Files saved directly
-                self.lbl_current_file.setText(f"✓ Descarga completada. {len(files)} archivo(s) guardados.")
-                QMessageBox.information(self, "Descarga completada",
-                                      f"{message}\n\nLos archivos se han guardado en:\n{self.out_dir_line.text() or str(Path.cwd() / 'downloads')}")
-                self.url_input.clear()
+                # Solo descargar, sin convertir
                 self.set_ui_enabled(True)
+                self.lbl_current_file.setText("✓ Descarga completada")
+                
+                # Mostrar archivos descargados
+                files_list = "\n".join([os.path.basename(f) for f in files[:5]])
+                if len(files) > 5:
+                    files_list += f"\n... y {len(files) - 5} más"
+                
+                QMessageBox.information(
+                    self, "Descarga completada", 
+                    f"Se descargaron {len(files)} archivo(s):\n\n{files_list}\n\n"
+                    f"Guardados en: {self.out_dir_line.text() or './downloads'}"
+                )
+                self.url_input.clear()
         else:
-            self.lbl_current_file.setText("✗ Error en la descarga")
-            QMessageBox.warning(self, "Error en descarga", message)
+            # ERROR en descarga
             self.set_ui_enabled(True)
+            self.lbl_current_file.setText("✗ Error en descarga")
+            self.progress_overall.setValue(0)
+            self.progress_current.setValue(0)
+            QMessageBox.warning(self, "Error en descarga", message)
 
 
 def main():
+    # CRÍTICO: Protección para evitar múltiples instancias en Windows
+    # Esto es necesario cuando se usa multiprocessing o subprocess en ejecutables
+    if sys.platform.startswith('win'):
+        import multiprocessing
+        multiprocessing.freeze_support()
+    
     app = QApplication(sys.argv)
     w = MainWindow()
     w.show()

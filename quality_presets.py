@@ -11,6 +11,61 @@ import json
 import subprocess
 from pathlib import Path
 
+# ---------------------------
+# Caché de Metadatos
+# ---------------------------
+
+class MetadataCache:
+    """
+    Caché simple para evitar llamadas repetidas a ffprobe para el mismo archivo.
+    Reduce de 3+ llamadas a 1 por archivo.
+    """
+    def __init__(self):
+        self._cache = {}
+    
+    def get_or_probe(self, ffprobe: str, fpath: str) -> dict:
+        """Obtiene metadatos del caché o los obtiene con ffprobe"""
+        if fpath not in self._cache:
+            self._cache[fpath] = self._probe_all(ffprobe, fpath)
+        return self._cache[fpath]
+    
+    def _probe_all(self, ffprobe: str, fpath: str) -> dict:
+        """Una sola llamada a ffprobe para obtener todos los metadatos necesarios"""
+        cmd = [
+            ffprobe, "-v", "error",
+            "-show_entries", "stream:format",
+            "-of", "json", fpath
+        ]
+        p = subprocess.run(cmd, capture_output=True, text=True)
+        if p.returncode != 0:
+            return {}
+        try:
+            return json.loads(p.stdout)
+        except:
+            return {}
+    
+    def get_stream_info(self, ffprobe: str, fpath: str) -> dict:
+        """Obtiene info del primer stream de audio"""
+        data = self.get_or_probe(ffprobe, fpath)
+        if "streams" in data and data["streams"]:
+            return data["streams"][0]
+        return {}
+    
+    def get_duration(self, ffprobe: str, fpath: str) -> float:
+        """Obtiene duración del formato"""
+        data = self.get_or_probe(ffprobe, fpath)
+        try:
+            return float(data.get("format", {}).get("duration", 0))
+        except:
+            return 0.0
+    
+    def clear(self):
+        """Limpia el caché (útil si se procesan muchos archivos)"""
+        self._cache.clear()
+
+# Instancia global del caché
+_metadata_cache = MetadataCache()
+
 SUPPORTED_FORMATS_DISPLAY = [
     "WAV (PCM)",
     "FLAC (sin pérdida)",
@@ -45,16 +100,12 @@ def _format_is_lossy(codec: str) -> bool:
     return codec in {"mp3","aac","opus","vorbis","wma","mp2","ac3","eac3"}
 
 def _duration_seconds(ffprobe: str, fpath: str) -> float:
-    cmd = [ffprobe,"-v","error","-show_entries","format=duration",
-           "-of","default=nw=1:nk=1", fpath]
-    p = subprocess.run(cmd, capture_output=True, text=True)
-    try:
-        return float((p.stdout or "0").strip())
-    except:
-        return 0.0
+    """Obtiene duración usando caché"""
+    return _metadata_cache.get_duration(ffprobe, fpath)
     
 def _src_bitrate_kbps(ffprobe: str, fpath: str) -> int:
-    info = _stream_info(ffprobe, fpath)
+    """Obtiene bitrate de origen usando caché"""
+    info = _metadata_cache.get_stream_info(ffprobe, fpath)
     br = int(info.get("bit_rate") or 0)
     if br <= 0:
         # VBR: estima por tamaño/tiempo
@@ -86,8 +137,8 @@ def _kbps_to_vorbis_q(kbps: int) -> int:
     return 5
 
 def _match_policy_for_lossy(ffprobe: str, in_file: str, target_codec: str) -> dict:
-    """Devuelve {'mode':'cbr'/'vbr','kbps':int,'vorbis_q':int} según origen."""
-    info = _stream_info(ffprobe, in_file)
+    """Devuelve {'mode':'cbr'/'vbr','kbps':int,'vorbis_q':int} según origen. Usa caché."""
+    info = _metadata_cache.get_stream_info(ffprobe, in_file)
     src_codec = (info.get("codec_name") or "").lower()
     if not _format_is_lossy(src_codec):
         return {}
@@ -129,10 +180,8 @@ def _probe(ffprobe: str, fpath: str, entries: str, select: str = "a:0") -> dict:
         return {}
 
 def _stream_info(ffprobe: str, fpath: str) -> dict:
-    data = _probe(ffprobe, fpath, "stream=codec_name,codec_type,channels,sample_rate,sample_fmt,bit_rate,duration")
-    if "streams" in data and data["streams"]:
-        return data["streams"][0]
-    return {}
+    """Obtiene info del stream usando caché"""
+    return _metadata_cache.get_stream_info(ffprobe, fpath)
 
 def can_stream_copy(in_f: str, out_f: str, ffprobe: str, target_codec_key: str, params: dict) -> bool:
     """
@@ -190,7 +239,8 @@ def _soxr_filter(use_soxr: bool) -> list:
     return []
 
 def _format_sample_opts_lossless(fmt_key: str, ffprobe: str, in_file: str) -> list:
-    info = _stream_info(ffprobe, in_file)
+    """Opciones de formato para codecs lossless. Usa caché."""
+    info = _metadata_cache.get_stream_info(ffprobe, in_file)
     src_fmt = (info.get("sample_fmt") or "").lower()
 
     if fmt_key == "flac":
@@ -210,7 +260,8 @@ def _format_sample_opts_lossless(fmt_key: str, ffprobe: str, in_file: str) -> li
     return []
 
 def _wav_codec_for_source(ffprobe: str, in_file: str) -> list:
-    info = _stream_info(ffprobe, in_file)
+    """Selecciona codec WAV según origen. Usa caché."""
+    info = _metadata_cache.get_stream_info(ffprobe, in_file)
     src_fmt = (info.get("sample_fmt") or "").lower()
     if any(t in src_fmt for t in ("fltp", "flt", "dbl")):
         return ["-c:a", "pcm_f32le"]
